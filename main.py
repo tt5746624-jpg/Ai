@@ -3,15 +3,11 @@ import time
 import re
 import html
 import json
-import urllib.parse
 
 BOT_TOKEN = "8707250409:AAF_uLsSYVL_-nik_kYZVDBXioxcaBXxafs"
 BOT_USERNAME = "@xoni_ai_testbot"
 AI_API = "https://r-bots-free-apis.co08.art/api/gemini"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
-# AI Image Generator
-IMAGE_API = "https://image.pollinations.ai/prompt"
 
 MESSAGE_LIMIT = 3500
 MAX_HISTORY = 6
@@ -94,53 +90,6 @@ def send_message(chat_id, text, reply_to=None):
     return telegram("sendMessage", data)
 
 
-def send_photo(chat_id, photo, caption=None, reply_to=None):
-    data = {"chat_id": chat_id, "photo": photo}
-    if caption:
-        data["caption"] = caption[:1024]
-        data["parse_mode"] = "HTML"
-    if reply_to:
-        data["reply_to_message_id"] = reply_to
-    return telegram("sendPhoto", data)
-
-
-def create_image(chat_id, prompt, reply_to=None):
-    prompt = prompt.strip()
-    if not prompt:
-        send_message(
-            chat_id,
-            "🎨 <b>Image Creator</b>\n\n"
-            "ပုံဖန်တီးချင်တဲ့ prompt ကိုရေးပေးပါ။\n\n"
-            "ဥပမာ — <code>/image cyberpunk developer desk, neon lights</code>",
-            reply_to
-        )
-        return
-
-    status = send_message(chat_id, "🎨 <b>Creating image...</b>", reply_to)
-    status_id = status.get("result", {}).get("message_id") if status and status.get("ok") else None
-
-    try:
-        encoded = urllib.parse.quote(prompt, safe="")
-        image_url = f"{IMAGE_API}/{encoded}?width=1024&height=1024&nologo=true&model=flux"
-
-        result = send_photo(
-            chat_id,
-            image_url,
-            "🎨 <b>Xoni AI Image Creator</b>\n"
-            f"📝 {html.escape(prompt[:700])}",
-            reply_to
-        )
-
-        if not result or not result.get("ok"):
-            send_message(chat_id, "❌ <b>Image creation failed.</b>\nခဏနေပြီး prompt ပြန်စမ်းကြည့်ပါ။", reply_to)
-    except Exception as e:
-        print("[Image Error]", e)
-        send_message(chat_id, "❌ <b>Image Creator Error</b>\nပုံဖန်တီးရာမှာ error ဖြစ်သွားပါတယ်။", reply_to)
-    finally:
-        if status_id:
-            delete_message(chat_id, status_id)
-
-
 def edit_message(chat_id, message_id, text):
     return telegram("editMessageText", {
         "chat_id": chat_id,
@@ -190,35 +139,6 @@ def send_document(chat_id, content, filename, caption=None, reply_to=None):
 
 def normalize(text):
     return re.sub(r"\s+", " ", text.lower().strip())
-
-
-def is_image_request(text):
-    t = normalize(text)
-    patterns = [
-        "/image", "/img", "image create", "create image",
-        "generate image", "make an image", "image generator",
-        "image creator", "ပုံလုပ်", "ပုံဖန်တီး", "ပုံဆွဲ",
-        "image လုပ်"
-    ]
-    return any(x in t for x in patterns)
-
-
-def extract_image_prompt(text):
-    t = text.strip()
-    for cmd in ("/image", "/img"):
-        if t.lower().startswith(cmd):
-            return t[len(cmd):].strip()
-
-    patterns = [
-        "create image", "generate image", "make an image",
-        "image create", "image creator", "image generator",
-        "ပုံဖန်တီး", "ပုံလုပ်", "ပုံဆွဲ", "image လုပ်"
-    ]
-    low = t.lower()
-    for prefix in patterns:
-        if low.startswith(prefix):
-            return t[len(prefix):].strip(" :,-")
-    return t
 
 
 def is_file_request(text):
@@ -546,11 +466,6 @@ def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
 def process_ai(chat_id, user_id, question, reply_to=None):
     last_question[user_id] = question
 
-    if is_image_request(question):
-        prompt = extract_image_prompt(question)
-        create_image(chat_id, prompt, reply_to)
-        return
-
     code_mode = is_code_request(question)
     file_requested = is_file_request(question)
 
@@ -605,16 +520,10 @@ def handle_command(message, chat_id, user_id):
             "👤 Xoni Profile\n"
             "💻 Writing code\n"
             "📁 Send as file\n"
-            "🎨 AI Image Creator\n"
             "📋 Copy-friendly code\n"
             "💬 Memory\n\n"
             "/help  /clear  /again"
         )
-        return True
-
-    if text.startswith("/image") or text.startswith("/img"):
-        prompt = extract_image_prompt(text)
-        create_image(chat_id, prompt, msg_id)
         return True
 
     if text.startswith("/help"):
@@ -623,7 +532,6 @@ def handle_command(message, chat_id, user_id):
             "🛠 <b>Xoni AI Help</b>\n\n"
             "/start — Start\n"
             "/help — Help\n"
-            "/image <prompt> — Create image\n"
             "/clear — Clear memory\n"
             "/again — Ask again\n\n"
             "🧠 Normal question → Thinking\n"
@@ -718,7 +626,6 @@ def main():
 ║ 🧠 Thinking                         ║
 ║ 💻 Writing code                     ║
 ║ 📁 Send as file                     ║
-║ 🎨 AI Image Creator                 ║
 ║ 📋 Copy-friendly code               ║
 ║ 📄 Long text → TXT                  ║
 ║ 👤 Xoni profile                     ║
