@@ -11,8 +11,8 @@ BOT_USERNAME = "@xoni_ai_testbot"
 AI_API = "https://r-bots-free-apis.co08.art/api/gemini"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-MESSAGE_LIMIT = 3500
-MAX_HISTORY = 6
+MESSAGE_LIMIT = 1000000
+MAX_HISTORY = 1000
 ADMIN_IDS = [6912974998]  # Replace with your Telegram user ID
 
 user_history = {}
