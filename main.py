@@ -3,6 +3,8 @@ import time
 import re
 import html
 import json
+import os
+from datetime import datetime
 
 BOT_TOKEN = "8707250409:AAF_uLsSYVL_-nik_kYZVDBXioxcaBXxafs"
 BOT_USERNAME = "@xoni_ai_testbot"
@@ -11,9 +13,13 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 MESSAGE_LIMIT = 3500
 MAX_HISTORY = 6
+ADMIN_IDS = [6912974998]  # Replace with your Telegram user ID
 
 user_history = {}
 last_question = {}
+user_stats = {}
+banned_users = set()
+admin_sessions = {}
 
 XONI_PROFILE = """
 XONI PROFILE:
@@ -64,7 +70,6 @@ EXT = {
     "yml": "yml", "markdown": "md", "md": "md"
 }
 
-
 def telegram(method, data=None, files=None, timeout=60):
     try:
         url = f"{TELEGRAM_API}/{method}"
@@ -77,8 +82,7 @@ def telegram(method, data=None, files=None, timeout=60):
         print("[Telegram Error]", e)
         return None
 
-
-def send_message(chat_id, text, reply_to=None):
+def send_message(chat_id, text, reply_to=None, reply_markup=None):
     data = {
         "chat_id": chat_id,
         "text": text,
@@ -87,17 +91,20 @@ def send_message(chat_id, text, reply_to=None):
     }
     if reply_to:
         data["reply_to_message_id"] = reply_to
+    if reply_markup:
+        data["reply_markup"] = reply_markup
     return telegram("sendMessage", data)
 
-
-def edit_message(chat_id, message_id, text):
-    return telegram("editMessageText", {
+def edit_message(chat_id, message_id, text, reply_markup=None):
+    data = {
         "chat_id": chat_id,
         "message_id": message_id,
         "text": text,
         "parse_mode": "HTML"
-    })
-
+    }
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    return telegram("editMessageText", data)
 
 def delete_message(chat_id, message_id):
     return telegram("deleteMessage", {
@@ -105,13 +112,11 @@ def delete_message(chat_id, message_id):
         "message_id": message_id
     })
 
-
 def typing(chat_id):
     return telegram("sendChatAction", {
         "chat_id": chat_id,
         "action": "typing"
     })
-
 
 def send_document(chat_id, content, filename, caption=None, reply_to=None):
     data = {"chat_id": chat_id}
@@ -129,17 +134,10 @@ def send_document(chat_id, content, filename, caption=None, reply_to=None):
         )
     }
 
-    return telegram(
-        "sendDocument",
-        data,
-        files=files,
-        timeout=120
-    )
-
+    return telegram("sendDocument", data, files=files, timeout=120)
 
 def normalize(text):
     return re.sub(r"\s+", " ", text.lower().strip())
-
 
 def is_file_request(text):
     t = normalize(text)
@@ -152,7 +150,6 @@ def is_file_request(text):
         "ဖိုင်အနေနဲ့ပို့", "ဖိုင်အနေနဲ့ပေး"
     ]
     return any(x in t for x in patterns)
-
 
 def is_code_request(text):
     t = normalize(text)
@@ -170,10 +167,8 @@ def is_code_request(text):
     ]
     return any(x in t for x in patterns)
 
-
 def detect_language(text):
     s = text.lower()
-
     if "public class " in s or "system.out.println" in s:
         return "java"
     if "fun main(" in s or ("val " in s and "println(" in s):
@@ -196,9 +191,7 @@ def detect_language(text):
         return "sql"
     if "#!/bin/bash" in s or "pkg install " in s:
         return "bash"
-
     return "text"
-
 
 def detect_code_language(text):
     m = re.search(r"```([a-zA-Z0-9_+#.-]*)", text)
@@ -206,11 +199,9 @@ def detect_code_language(text):
         return m.group(1).lower()
     return detect_language(text)
 
-
 def is_code_response(text):
     if "```" in text:
         return True
-
     s = text.lower()
     signs = [
         "public class ", "def ", "<?php", "<html", "console.log(",
@@ -218,7 +209,6 @@ def is_code_response(text):
         "import android.", "package com.", "function "
     ]
     return any(x in s for x in signs)
-
 
 def extract_code(text):
     blocks = re.findall(
@@ -229,7 +219,6 @@ def extract_code(text):
     if blocks:
         return "\n\n".join(x.strip() for x in blocks)
     return text.strip()
-
 
 def format_response(text):
     blocks = []
@@ -255,7 +244,6 @@ def format_response(text):
         )
 
     return text
-
 
 def ask_ai(user_id, question):
     old = user_history.get(user_id, [])
@@ -334,26 +322,20 @@ def ask_ai(user_id, question):
         print("[AI Error]", e)
         return None, 0
 
-
 def status_message(chat_id, code_mode):
     text = (
         "💻 <b>Writing code...</b>"
         if code_mode
         else "🧠 <b>Thinking...</b>"
     )
-
     result = send_message(chat_id, text)
-
     if result and result.get("ok"):
         return result["result"]["message_id"]
-
     return None
-
 
 def animate_status(chat_id, message_id, code_mode):
     if not message_id:
         return
-
     if code_mode:
         states = [
             "💻 <b>Writing code.</b>",
@@ -366,16 +348,13 @@ def animate_status(chat_id, message_id, code_mode):
             "🧠 <b>Thinking..</b>",
             "🧠 <b>Thinking...</b>"
         ]
-
     for state in states:
         time.sleep(0.3)
         edit_message(chat_id, message_id, state)
 
-
 def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
     code = is_code_response(answer)
 
-    # Explicit file request always wins.
     if file_requested:
         if code:
             content = extract_code(answer)
@@ -395,13 +374,7 @@ def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
                 f"⚡ {elapsed:.2f}s"
             )
 
-        result = send_document(
-            chat_id,
-            content,
-            filename,
-            caption,
-            reply_to
-        )
+        result = send_document(chat_id, content, filename, caption, reply_to)
 
         if result and result.get("ok"):
             return
@@ -412,7 +385,6 @@ def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
             reply_to
         )
 
-    # Long code automatically becomes source file.
     if code:
         content = extract_code(answer)
 
@@ -442,7 +414,6 @@ def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
             reply_to
         )
 
-    # Long text automatically becomes TXT.
     if len(answer) > MESSAGE_LIMIT:
         result = send_document(
             chat_id,
@@ -462,30 +433,24 @@ def send_answer(chat_id, answer, elapsed, file_requested, reply_to=None):
         reply_to
     )
 
-
 def process_ai(chat_id, user_id, question, reply_to=None):
+    if user_id in banned_users:
+        send_message(chat_id, "🚫 You are banned from using this bot.")
+        return
+
     last_question[user_id] = question
+
+    # Track user stats
+    user_stats[user_id] = user_stats.get(user_id, 0) + 1
 
     code_mode = is_code_request(question)
     file_requested = is_file_request(question)
 
-    status_id = status_message(
-        chat_id,
-        code_mode
-    )
-
+    status_id = status_message(chat_id, code_mode)
     typing(chat_id)
+    animate_status(chat_id, status_id, code_mode)
 
-    animate_status(
-        chat_id,
-        status_id,
-        code_mode
-    )
-
-    answer, elapsed = ask_ai(
-        user_id,
-        question
-    )
+    answer, elapsed = ask_ai(user_id, question)
 
     if status_id:
         delete_message(chat_id, status_id)
@@ -499,18 +464,185 @@ def process_ai(chat_id, user_id, question, reply_to=None):
         )
         return
 
-    send_answer(
-        chat_id,
-        answer,
-        elapsed,
-        file_requested,
-        reply_to
-    )
+    send_answer(chat_id, answer, elapsed, file_requested, reply_to)
 
+def handle_admin_panel(chat_id, user_id):
+    if user_id not in ADMIN_IDS:
+        return False
+
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📊 Statistics", "callback_data": "admin_stats"}],
+            [{"text": "👥 User List", "callback_data": "admin_users"}],
+            [{"text": "🚫 Banned Users", "callback_data": "admin_banned"}],
+            [{"text": "📢 Broadcast", "callback_data": "admin_broadcast"}],
+            [{"text": "❌ Close Panel", "callback_data": "admin_close"}]
+        ]
+    }
+
+    send_message(
+        chat_id,
+        "🛠 <b>Admin Panel</b>\n\nSelect an option:",
+        reply_markup=keyboard
+    )
+    return True
+
+def handle_callback(callback_query):
+    chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+    user_id = callback_query.get("from", {}).get("id")
+    message_id = callback_query.get("message", {}).get("message_id")
+    data = callback_query.get("data")
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if data == "admin_close":
+        delete_message(chat_id, message_id)
+        return
+
+    if data == "admin_stats":
+        total_users = len(user_stats)
+        total_questions = sum(user_stats.values())
+        total_history = len(user_history)
+        banned_count = len(banned_users)
+
+        stats_text = (
+            "📊 <b>Bot Statistics</b>\n\n"
+            f"👥 Total Users: {total_users}\n"
+            f"❓ Total Questions: {total_questions}\n"
+            f"💬 Active Conversations: {total_history}\n"
+            f"🚫 Banned Users: {banned_count}\n"
+            f"⏰ Server Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        edit_message(chat_id, message_id, stats_text)
+        return
+
+    if data == "admin_users":
+        if not user_stats:
+            edit_message(chat_id, message_id, "👥 No users found.")
+            return
+
+        users_list = []
+        for uid, count in sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:20]:
+            status = "🚫" if uid in banned_users else "✅"
+            users_list.append(f"{status} {uid}: {count} questions")
+
+        users_text = (
+            "👥 <b>Top Users</b>\n\n"
+            + "\n".join(users_list)
+            + "\n\nTotal: " + str(len(user_stats))
+        )
+
+        edit_message(chat_id, message_id, users_text)
+        return
+
+    if data == "admin_banned":
+        if not banned_users:
+            edit_message(chat_id, message_id, "🚫 No banned users.")
+            return
+
+        banned_text = (
+            "🚫 <b>Banned Users</b>\n\n"
+            + "\n".join(str(uid) for uid in banned_users)
+        )
+
+        edit_message(chat_id, message_id, banned_text)
+        return
+
+    if data == "admin_broadcast":
+        admin_sessions[user_id] = "awaiting_broadcast"
+        edit_message(
+            chat_id,
+            message_id,
+            "📢 Send the message you want to broadcast to all users."
+        )
+        return
+
+def broadcast_message(text):
+    success_count = 0
+    fail_count = 0
+
+    for user_id in list(user_stats.keys()):
+        try:
+            result = send_message(user_id, text)
+            if result and result.get("ok"):
+                success_count += 1
+            else:
+                fail_count += 1
+            time.sleep(0.1)  # Rate limiting
+        except:
+            fail_count += 1
+
+    return success_count, fail_count
+
+def handle_file_upload(message, chat_id, user_id):
+    # Check for document
+    if "document" in message:
+        doc = message["document"]
+        file_name = doc.get("file_name", "file.txt")
+        file_id = doc.get("file_id")
+        file_size = doc.get("file_size", 0)
+        mime_type = doc.get("mime_type", "unknown")
+
+        # Get file info
+        file_info = telegram("getFile", {"file_id": file_id})
+        if not file_info or not file_info.get("ok"):
+            send_message(chat_id, "❌ Failed to get file information.")
+            return
+
+        file_path = file_info["result"]["file_path"]
+        download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
+        try:
+            # Download the file
+            file_response = requests.get(download_url, timeout=30)
+            
+            if file_response.status_code == 200:
+                file_content = file_response.content
+                
+                # Try to decode as text
+                try:
+                    text_content = file_content.decode("utf-8")
+                except:
+                    text_content = None
+
+                if text_content and len(text_content) < 50000:
+                    # Process text file content
+                    file_requested = is_file_request(message.get("caption", ""))
+                    process_ai(chat_id, user_id, f"Analyze this file content:\n\nFile name: {file_name}\nFile size: {file_size} bytes\n\nContent:\n{text_content[:10000]}", message.get("message_id"))
+                else:
+                    send_message(
+                        chat_id,
+                        f"📁 <b>File Received</b>\n\n"
+                        f"Name: {html.escape(file_name)}\n"
+                        f"Size: {file_size} bytes\n"
+                        f"Type: {mime_type}\n\n"
+                        "File is too large or not a text file."
+                    )
+            else:
+                send_message(chat_id, "❌ Failed to download file.")
+                
+        except Exception as e:
+            print(f"[File Download Error] {e}")
+            send_message(chat_id, "❌ Error processing file.")
+        return
+
+    # Check for photo
+    if "photo" in message:
+        send_message(
+            chat_id,
+            "🖼 Photo received. I can't process images yet, but text files work!"
+        )
+        return
 
 def handle_command(message, chat_id, user_id):
     text = message.get("text", "").strip()
     msg_id = message.get("message_id")
+
+    if user_id in banned_users and text not in ["/start"]:
+        send_message(chat_id, "🚫 You are banned from using this bot.")
+        return True
 
     if text.startswith("/start"):
         send_message(
@@ -521,7 +653,8 @@ def handle_command(message, chat_id, user_id):
             "💻 Writing code\n"
             "📁 Send as file\n"
             "📋 Copy-friendly code\n"
-            "💬 Memory\n\n"
+            "💬 Memory\n"
+            "📤 File upload support\n\n"
             "/help  /clear  /again"
         )
         return True
@@ -537,6 +670,7 @@ def handle_command(message, chat_id, user_id):
             "🧠 Normal question → Thinking\n"
             "💻 Coding request → Writing code\n"
             "📁 send as file → File\n"
+            "📤 Upload file → AI analyzes content\n"
             "📋 Short code → Copy-friendly\n"
             "📁 Long code → Source file\n"
             "📄 Long text → TXT"
@@ -557,8 +691,48 @@ def handle_command(message, chat_id, user_id):
             process_ai(chat_id, user_id, q, msg_id)
         return True
 
-    return False
+    # Admin commands
+    if text.startswith("/admin") or text.startswith("/panel"):
+        return handle_admin_panel(chat_id, user_id)
 
+    if text.startswith("/broadcast") and user_id in ADMIN_IDS:
+        # Broadcast format: /broadcast message
+        broadcast_text = text.replace("/broadcast", "").strip()
+        if broadcast_text:
+            success, fail = broadcast_message(broadcast_text)
+            send_message(
+                chat_id,
+                f"📢 <b>Broadcast Complete</b>\n\n"
+                f"✅ Success: {success}\n"
+                f"❌ Failed: {fail}"
+            )
+        else:
+            admin_sessions[user_id] = "awaiting_broadcast"
+            send_message(chat_id, "📢 Send the message you want to broadcast.")
+        return True
+
+    if text.startswith("/ban") and user_id in ADMIN_IDS:
+        try:
+            target_id = int(text.replace("/ban", "").strip())
+            banned_users.add(target_id)
+            send_message(chat_id, f"🚫 User {target_id} has been banned.")
+        except:
+            send_message(chat_id, "❌ Invalid user ID. Usage: /ban [user_id]")
+        return True
+
+    if text.startswith("/unban") and user_id in ADMIN_IDS:
+        try:
+            target_id = int(text.replace("/unban", "").strip())
+            if target_id in banned_users:
+                banned_users.remove(target_id)
+                send_message(chat_id, f"✅ User {target_id} has been unbanned.")
+            else:
+                send_message(chat_id, "❌ User is not banned.")
+        except:
+            send_message(chat_id, "❌ Invalid user ID. Usage: /unban [user_id]")
+        return True
+
+    return False
 
 def group_text(message, text):
     chat_type = message.get("chat", {}).get("type")
@@ -596,7 +770,6 @@ def group_text(message, text):
 
     return text.strip()
 
-
 def get_updates(offset=None):
     params = {
         "timeout": 30,
@@ -616,7 +789,6 @@ def get_updates(offset=None):
         print("[Update Error]", e)
         return {"ok": False, "result": []}
 
-
 def main():
     print("""
 ╔══════════════════════════════════════╗
@@ -626,6 +798,8 @@ def main():
 ║ 🧠 Thinking                         ║
 ║ 💻 Writing code                     ║
 ║ 📁 Send as file                     ║
+║ 📤 File upload support              ║
+║ 🛠 Admin panel                      ║
 ║ 📋 Copy-friendly code               ║
 ║ 📄 Long text → TXT                  ║
 ║ 👤 Xoni profile                     ║
@@ -636,6 +810,10 @@ def main():
     if BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         print("❌ Set BOT_TOKEN first.")
         return
+
+    if ADMIN_IDS == [1234567890]:
+        print("⚠️  Set your ADMIN_IDS in the code!")
+        print("    Replace 1234567890 with your Telegram user ID")
 
     offset = None
 
@@ -650,6 +828,11 @@ def main():
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
 
+                # Handle callback queries
+                if "callback_query" in update:
+                    handle_callback(update["callback_query"])
+                    continue
+
                 message = update.get("message")
                 if not message:
                     continue
@@ -658,7 +841,28 @@ def main():
                 user_id = message.get("from", {}).get("id")
                 text = message.get("text", "").strip()
 
-                if not chat_id or not user_id or not text:
+                if not chat_id or not user_id:
+                    continue
+
+                # Handle admin broadcast session
+                if user_id in admin_sessions and admin_sessions[user_id] == "awaiting_broadcast":
+                    if text:
+                        success, fail = broadcast_message(text)
+                        send_message(
+                            chat_id,
+                            f"📢 <b>Broadcast Complete</b>\n\n"
+                            f"✅ Success: {success}\n"
+                            f"❌ Failed: {fail}"
+                        )
+                        del admin_sessions[user_id]
+                        continue
+
+                # Handle file uploads
+                if "document" in message or "photo" in message:
+                    handle_file_upload(message, chat_id, user_id)
+                    continue
+
+                if not text:
                     continue
 
                 if text.startswith("/"):
@@ -684,7 +888,6 @@ def main():
         except Exception as e:
             print("[MAIN ERROR]", e)
             time.sleep(3)
-
 
 if __name__ == "__main__":
     main()
